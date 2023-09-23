@@ -1,0 +1,262 @@
+;; Each test function must specify method_id
+;; Test functions method_id need to started from 0
+
+;; Each test functions must to be in pairs
+;; First funtion expect nothing in arguments
+;; But need to return:
+;;        function selector - which function to test, e.g. 0 for recv_internal, -1 recv_external, 85143 for seqno, and so on
+;;        tuple - stack values needed to be passed to function in tuple
+;;        c4 cell - start data of smart contract
+;;        c7 tuple / null
+;;        gas limit integer / null
+
+int equal_slices (slice a, slice b) asm "SDEQ";
+
+slice make_std_addr(int addr) inline method_id {
+    return begin_cell()
+        .store_uint(2, 2) ;; first int 2 of tuple
+        .store_uint(0, 1) ;; null for anycast absent
+        .store_int(0, 8)           ;; workchain id
+        .store_uint(addr, 256)       ;; address
+      .end_cell().begin_parse();
+}
+
+slice make_none_addr() inline method_id {
+    return begin_cell().store_uint(0, 2).end_cell().begin_parse();
+}
+
+;; msg    msg_body
+(builder, builder) make_internal_msg(slice s_addr, int value, int op_code, int query_id) inline method_id {
+    builder in_msg = begin_cell()     ;; external message body
+            .store_uint(6, 4)        ;; flags
+            ;; sender internal address
+            .store_slice(s_addr)
+            ;; receiver address (me)
+            .store_slice(make_none_addr())
+            ;; .store_slice(my_address())
+            ;; msg value
+            .store_grams(value)
+            ;; empty extra-currencies dictionary
+            .store_uint(0, 1)
+            ;; ihr_fee 
+            .store_uint(10, 4)
+            ;; fwd_fee 
+            .store_uint(10, 4)
+            ;; created_lt and created_at & there is no init field & msg body serialized in place
+            .store_uint(10, 64 + 32 + 1 + 1);
+    builder msg_body = begin_cell()     ;; external message body
+                    .store_uint(op_code, 32)            
+                    .store_uint(query_id, 64);
+
+    return (in_msg, msg_body);
+}
+;; mode, out_msg
+(tuple, slice) parse_action(slice action) inline method_id {
+    action~load_ref(); ;; reference to previous action
+    (int action_mode, int send_msg_mode) = (action~load_uint(32), action~load_uint(8));
+    slice out_msg = action~load_ref().begin_parse();
+    return (unsafe_tuple([action_mode, send_msg_mode]), out_msg);
+}
+
+
+;; Test report
+
+[int, tuple, cell, tuple, int] test_report_data() method_id(0) {
+
+    slice manager_addr = make_std_addr(123); 
+    slice mem_addr = make_none_addr(); ;; address memorized in contract data
+    cell data = begin_cell()             ;; initial data of contract
+            .store_slice(manager_addr)
+            .store_slice(mem_addr)
+        .end_cell();        
+
+    ;; Funtion to run (recv_internal)
+    int function_selector = 0;
+
+    tuple c7 = get_c7();
+    int balance = 1000000000;
+    int msg_value = 1000;
+
+    ;; ;; Report message from client (op 2)
+    slice req_addr = make_std_addr(456); ;; source address report
+    int op_report = 2;
+    int query_id_report = 0x2;
+
+    (builder bmsg_report_in, builder bmsg_report_body) = make_internal_msg(
+        req_addr,
+        ;; manager_addr,
+        msg_value,
+        op_report,
+        query_id_report
+    );
+    slice msg_report_body = bmsg_report_body.end_cell().begin_parse();
+    cell msg_report = bmsg_report_in.store_slice(msg_report_body).end_cell();
+
+    tuple stack = unsafe_tuple([balance, msg_value, msg_report, msg_report_body]); ;; stack that will be passed to function
+
+    tuple debug_rep = unsafe_tuple([
+      unsafe_tuple([req_addr.parse_std_addr()]),
+      unsafe_tuple([op_report, query_id_report])
+    ]);
+    debug_rep~dump();
+
+    return [function_selector, stack, data, c7, null()];
+}
+
+_ test_report(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(1) {
+    ;; return ();
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+    ;; return ();
+
+    slice action = actions.begin_parse();
+    throw_unless(101, action.slice_refs());
+    (tuple mode, slice out_msg) = parse_action(action);
+
+    ;; check msg to send
+    slice manager_addr = make_std_addr(123); 
+    slice mem_addr = make_none_addr(); ;; address memorized in contract data
+    slice req_addr = make_std_addr(456); ;; source address report
+    int query_id_report = 0x2;
+    int op_report_ans = 3;
+
+    out_msg~load_uint(6); ;; flags
+    slice send_to_addr = out_msg~load_msg_addr();
+    throw_unless(102, equal_slices(req_addr, send_to_addr));
+    ;; throw_unless(102, equal_slices(manager_addr, send_to_addr));
+
+    int value = out_msg~load_grams();
+    out_msg~load_uint(1 + 4 + 4 + 64 + 32 + 1 + 1); ;; empty currencies + fees + flags
+
+    throw_if(103, out_msg~load_uint(32) != op_report_ans);
+
+    throw_if(104, out_msg~load_uint(64) != query_id_report);
+
+    throw_unless(105, 
+        equal_slices((slice rman_addr = out_msg~load_msg_addr()), manager_addr)
+    );
+
+    throw_unless(106, 
+        equal_slices((slice rmem_addr = out_msg~load_msg_addr()), mem_addr)
+    );
+
+    out_msg.end_parse();
+
+    tuple debug = unsafe_tuple([
+        exit_code,
+        unsafe_tuple([send_to_addr.parse_std_addr()]), 
+        mode,
+        unsafe_tuple([rman_addr.parse_std_addr()]),
+        unsafe_tuple(rmem_addr.parse_addr())
+        ;; ,b, 
+        ;; value,
+        ;; unsafe_tuple([action_mode, send_msg_mode]), 
+        ;; unsafe_tuple([sender_addr.parse_std_addr()]), 
+        ;; received_msg_body.preload_uint(64)
+    ]);
+    debug~dump();
+
+    var ds = data.begin_parse();
+    ;; throw_if(101, ds~load_uint(64) != 10); ;; check if counter has been changed
+    throw_if(107, gas > 1000000); ;; check if gas usage is not so big
+}
+
+
+;; Test memorize
+
+
+[int, tuple, cell, tuple, int] test_memorize_data() method_id(2) {
+
+    ;; Funtion to run (recv_internal)
+    int function_selector = 0;
+    tuple c7 = get_c7();
+    int balance = 1000000000;
+    int msg_value = 1000;
+
+
+    ;; contract data
+    ;; slice manager_addr = make_std_addr(123); 
+    ;; slice mem_addr = make_none_addr(); ;; address memorized in contract data
+    cell data = get_prev_c4();    
+    
+    slice ds = data.begin_parse();
+    (slice manager_addr, slice mem_addr) = (ds~load_msg_addr(), ds~load_msg_addr());
+    tuple prev_data = unsafe_tuple([
+        unsafe_tuple([manager_addr.parse_std_addr()]),
+        unsafe_tuple(mem_addr.parse_addr())
+    ]);
+    prev_data~dump();
+
+    slice no_man_addr = make_std_addr(456); ;; source address report
+
+    ;; ;; Memorize message from manager (op 1)
+    slice memorized_addr = make_std_addr(555);
+    int op_memorize = 1;
+    int query_id_memorize = 0x1;
+
+    (builder bmsg_memorize_in, builder bmsg_memorize_body) = make_internal_msg(
+        manager_addr,
+        ;; no_man_addr,
+        msg_value,
+        op_memorize,
+        query_id_memorize
+    );
+    
+    slice msg_memorize_body = bmsg_memorize_body
+        .store_slice(memorized_addr)
+        .end_cell().begin_parse();
+    cell msg_memorize = bmsg_memorize_in.store_slice(msg_memorize_body).end_cell();
+
+    tuple stack = unsafe_tuple([balance, msg_value, msg_memorize, msg_memorize_body]); ;; stack that will be passed to function
+
+    tuple debug_mem = unsafe_tuple([
+      unsafe_tuple([manager_addr.parse_std_addr()]),
+      unsafe_tuple([op_memorize, query_id_memorize]),
+      unsafe_tuple([memorized_addr.parse_std_addr()])
+    ]);
+    debug_mem~dump();
+            
+
+    return [function_selector, stack, data, c7, null()];
+}
+
+_ test_memorize(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(3) {
+    ;; return ();
+    if (exit_code != 0) {
+        exit_code~dump();
+        throw(100);
+        ;; return ();
+    }
+    ;; throw_if(100, exit_code != 0); ;; test need to be passed
+    ;; return ();
+    slice ds = data.begin_parse();
+    slice manager_addr = make_std_addr(123); 
+    slice memorized_addr = make_std_addr(555);
+
+    throw_unless(101, 
+        equal_slices((slice dman_addr = ds~load_msg_addr()), manager_addr)
+    );
+    throw_unless(102, 
+        equal_slices((slice dmem_addr = ds~load_msg_addr()), memorized_addr)
+    );
+
+    tuple debug = unsafe_tuple([
+        exit_code,
+        unsafe_tuple([dman_addr.parse_std_addr()]), 
+        unsafe_tuple([dmem_addr.parse_std_addr()])
+        ;; ,b, 
+        ;; value,
+        ;; unsafe_tuple([action_mode, send_msg_mode]), 
+        ;; unsafe_tuple([sender_addr.parse_std_addr()]), 
+        ;; received_msg_body.preload_uint(64)
+    ]);
+    debug~dump();
+
+    throw_if(103, gas > 1000000); ;; check if gas usage is not so big
+}
+
+
+
+;; Test report new address
+
+;; Test memorize from non-manager

@@ -1,0 +1,554 @@
+;; Each test function must specify method_id
+;; Test functions method_id need to started from 0
+
+;; Each test functions must to be in pairs
+;; First funtion expect nothing in arguments
+;; But need to return:
+;;        function selector - which function to test, e.g. 0 for recv_internal, -1 recv_external, 85143 for seqno, and so on
+;;        tuple - stack values needed to be passed to function in tuple
+;;        c4 cell - start data of smart contract
+;;        c7 tuple / null
+;;        gas limit integer / null
+
+int equal_slices (slice a, slice b) asm "SDEQ";
+
+slice make_none_addr() inline method_id {
+    return begin_cell().store_uint(0, 2).end_cell().begin_parse();
+}
+
+slice make_slice(int value, int len) inline_ref method_id {
+    return begin_cell().store_uint(value, len).end_cell().begin_parse();
+}
+
+;; msg    msg_body
+(builder, builder) make_internal_msg(slice s_addr, int value, int op_code, int query_id) inline method_id {
+    builder in_msg = begin_cell()     ;; external message body
+            .store_uint(6, 4)        ;; flags
+            ;; sender internal address
+            .store_slice(s_addr)
+            ;; receiver address (me)
+            .store_slice(make_none_addr())
+            ;; .store_slice(my_address())
+            ;; msg value
+            .store_grams(value)
+            ;; empty extra-currencies dictionary
+            .store_uint(0, 1)
+            ;; ihr_fee 
+            .store_uint(10, 4)
+            ;; fwd_fee 
+            .store_uint(10, 4)
+            ;; created_lt and created_at & there is no init field & msg body serialized in place
+            .store_uint(10, 64 + 32 + 1 + 1);
+    builder msg_body = begin_cell()     ;; external message body
+                    .store_uint(op_code, 32)            
+                    .store_uint(query_id, 64);
+
+    return (in_msg, msg_body);
+}
+
+;; Test add data
+
+[int, tuple, cell, tuple, int] test_add_data() method_id(0) {
+
+    slice sender_addr = make_none_addr(); ;; 
+    cell data = begin_cell()             ;; initial data of contract
+        .end_cell();        
+
+    ;; Funtion to run (recv_internal)
+    int function_selector = 0;
+
+    tuple c7 = get_c7();
+    int balance = 1000000000;
+    int msg_value = 1000;
+
+    int op_add = 1;
+    int query_id_add = 0x1;
+    (int key, int k_len) = (123, 256);
+    ;; (int valid_until, int v_len) = (1559054990, 64); ;; invalid
+    (int valid_until, int v_len) = (1659054990, 64); ;; valid
+    slice value = make_slice(666, 100);
+
+    (builder bmsg_add_in, builder bmsg_add_body) = make_internal_msg(
+        sender_addr,
+        msg_value,
+        op_add,
+        query_id_add
+    );
+    slice msg_add_body = bmsg_add_body
+        .store_uint(key, k_len) ;; key
+        .store_uint(valid_until, v_len) ;; valid_until unixtime 1649054990 3:50:20 am 4/4/2022
+        .store_slice(value)
+        .end_cell().begin_parse();
+    cell msg_add = bmsg_add_in.store_slice(msg_add_body).end_cell();
+
+    tuple stack = unsafe_tuple([balance, msg_value, msg_add, msg_add_body]); ;; stack that will be passed to function
+
+    tuple debug_rep = unsafe_tuple([
+    ;;   unsafe_tuple([req_addr.parse_std_addr()]),
+      unsafe_tuple([op_add, query_id_add]),
+      unsafe_tuple([key, valid_until, value.preload_uint(100)])
+    ]);
+    debug_rep~dump();
+
+    return [function_selector, stack, data, c7, null()];
+}
+
+_ test_add(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(1) {
+    ;; return ();
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+    ;; return ();
+    var ds = data.begin_parse();
+    ;; ds~dump();
+    ;; exit_code~dump();
+    throw_if(101, ds.slice_bits() == 0);
+    cell dict = ds~load_dict();
+    (int key, int key_len) = (123, 256);
+    ;; (cell cvalue, int f) = dict.udict_get_ref?(key_len, key);
+    ;; cvalue~dump();
+    (slice sdata, int f) = dict.udict_get?(key_len, key);
+    ;; sdata~dump();
+    throw_unless(102, f);
+    
+    ;; (int valid_until, int v_len) = (1559054990, 64); ;; invalid
+    (int valid_until, int v_len) = (1659054990, 64); ;; valid
+    slice value = make_slice(666, 100);
+
+    int d_valid = sdata~load_uint(64);
+    
+    throw_unless(103, d_valid == valid_until);
+
+    throw_unless(104, value.equal_slices(sdata));
+    ;; int len = sdata.slice_bits();
+    ;; len~dump();
+    ;; throw_unless(103, f1);
+
+    tuple debug = unsafe_tuple([
+          exit_code
+        , unsafe_tuple([
+            key
+          , d_valid
+          , sdata.preload_uint(sdata.slice_bits())
+          
+          ])
+    ]);
+    debug~dump();
+
+    var ds = data.begin_parse();
+    ;; throw_if(101, ds~load_uint(64) != 10); ;; check if counter has been changed
+    throw_if(107, gas > 1000000); ;; check if gas usage is not so big
+}
+
+;; Test add invalid data
+
+[int, tuple, cell, tuple, int] test_add2_data() method_id(2) {
+
+    slice sender_addr = make_none_addr(); ;; 
+    cell data = get_prev_c4();
+    slice ds = data.begin_parse();
+    cell d = ds~load_dict();
+    d~dump();
+
+    ;; Funtion to run (recv_internal)
+    int function_selector = 0;
+
+    tuple c7 = get_c7();
+    int balance = 1000000000;
+    int msg_value = 1000;
+
+    int op_add = 1;
+    int query_id_add = 0x1;
+    (int key, int k_len) = (456, 256);
+    (int valid_until, int v_len) = (1559054990, 64); ;; invalid
+    ;; (int valid_until, int v_len) = (1659054990, 64); ;; valid
+    slice value = make_slice(999, 100);
+
+    (builder bmsg_add_in, builder bmsg_add_body) = make_internal_msg(
+        sender_addr,
+        msg_value,
+        op_add,
+        query_id_add
+    );
+    slice msg_add_body = bmsg_add_body
+        .store_uint(key, k_len) ;; key
+        .store_uint(valid_until, v_len) ;; valid_until unixtime 1649054990 3:50:20 am 4/4/2022
+        .store_slice(value)
+        .end_cell().begin_parse();
+    cell msg_add = bmsg_add_in.store_slice(msg_add_body).end_cell();
+
+    tuple stack = unsafe_tuple([balance, msg_value, msg_add, msg_add_body]); ;; stack that will be passed to function
+
+    tuple debug_rep = unsafe_tuple([
+    ;;   unsafe_tuple([req_addr.parse_std_addr()]),
+      unsafe_tuple([op_add, query_id_add]),
+      unsafe_tuple([key, valid_until, value.preload_uint(100)])
+    ]);
+    debug_rep~dump();
+
+    return [function_selector, stack, data, c7, null()];
+}
+
+_ test_add2(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(3) {
+    ;; return ();
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+    ;; return ();
+    var ds = data.begin_parse();
+    ;; ds~dump();
+    ;; exit_code~dump();
+    throw_if(101, ds.slice_bits() == 0);
+    cell dict = ds~load_dict();
+    (int key1, int key2, int key_len) = (123, 456, 256);
+    ;; (cell cvalue, int f) = dict.udict_get_ref?(key_len, key);
+    ;; cvalue~dump();
+    (slice sdata, int f) = dict.udict_get?(key_len, key1);
+    ;; sdata~dump();
+    throw_unless(102, f);
+    (slice sdata, f) = dict.udict_get?(key_len, key2);
+    ;; sdata~dump();
+    throw_unless(103, f);
+    
+    tuple debug = unsafe_tuple([
+          exit_code
+    ]);
+    ;; debug~dump();
+
+    var ds = data.begin_parse();
+    throw_if(107, gas > 1000000); ;; check if gas usage is not so big
+}
+
+
+;; Test add invalid data
+
+[int, tuple, cell, tuple, int] test_add3_data() method_id(4) {
+
+    slice sender_addr = make_none_addr(); ;; 
+    cell data = get_prev_c4();   
+    ;; Funtion to run (recv_internal)
+    int function_selector = 0;
+
+    tuple c7 = get_c7();
+    int balance = 1000000000;
+    int msg_value = 1000;
+
+    int op_add = 1;
+    int query_id_add = 0x1;
+    (int key, int k_len) = (678, 256);
+    (int valid_until, int v_len) = (1555054990, 64); ;; invalid
+    ;; (int valid_until, int v_len) = (1659054990, 64); ;; valid
+    slice value = make_slice(999, 100);
+
+    (builder bmsg_add_in, builder bmsg_add_body) = make_internal_msg(
+        sender_addr,
+        msg_value,
+        op_add,
+        query_id_add
+    );
+    slice msg_add_body = bmsg_add_body
+        .store_uint(key, k_len) ;; key
+        .store_uint(valid_until, v_len) ;; valid_until unixtime 1649054990 3:50:20 am 4/4/2022
+        .store_slice(value)
+        .end_cell().begin_parse();
+    cell msg_add = bmsg_add_in.store_slice(msg_add_body).end_cell();
+
+    tuple stack = unsafe_tuple([balance, msg_value, msg_add, msg_add_body]); ;; stack that will be passed to function
+
+    tuple debug_rep = unsafe_tuple([
+    ;;   unsafe_tuple([req_addr.parse_std_addr()]),
+      unsafe_tuple([op_add, query_id_add]),
+      unsafe_tuple([key, valid_until, value.preload_uint(100)])
+    ]);
+    debug_rep~dump();
+
+    return [function_selector, stack, data, c7, null()];
+}
+
+_ test_add3(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(5) {
+    ;; return ();
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+    ;; return ();
+    var ds = data.begin_parse();
+    ;; ds~dump();
+    ;; exit_code~dump();
+    throw_if(101, ds.slice_bits() == 0);
+    cell dict = ds~load_dict();
+    (int key1, int key2, int key_len) = (123, 456, 256);
+    ;; (cell cvalue, int f) = dict.udict_get_ref?(key_len, key);
+    ;; cvalue~dump();
+    (slice sdata, int f) = dict.udict_get?(key_len, key1);
+    ;; sdata~dump();
+    throw_unless(102, f);
+    (slice sdata, f) = dict.udict_get?(key_len, key2);
+    ;; sdata~dump();
+    throw_unless(103, f);
+    
+    tuple debug = unsafe_tuple([
+          exit_code
+    ]);
+    ;; debug~dump();
+
+    var ds = data.begin_parse();
+    throw_if(107, gas > 1000000); ;; check if gas usage is not so big
+}
+
+;; Test remove outdated
+
+[int, tuple, cell, tuple, int] test_remove_data() method_id(6) {
+
+    slice sender_addr = make_none_addr(); ;; 
+    cell data = get_prev_c4();     
+    ;; slice ds = data.begin_parse();
+    ;; cell d = ds~load_dict();
+    cell d = data.begin_parse().preload_dict();
+  ;; d~dump();
+    int i = 0;
+    do {
+      d~udict_set_builder(256, rand(1000000), 
+        begin_cell()
+        .store_uint(rand(10) > 5 ? 1659054990 : 1159054990, 64)
+        .store_uint(100, 10)
+      );
+      i += 1;
+    } until (i > 100);
+    ;; d~dump();
+    data = begin_cell().store_dict(d).end_cell();
+    ;; Funtion to run (recv_internal)
+    int function_selector = 0;
+
+    tuple c7 = get_c7();
+    int balance = 1000000000;
+    int msg_value = 1000;
+
+    int op_add = 2;
+    int query_id_add = 0x2;
+    ;; (int key, int k_len) = (123, 256);
+    ;; (int valid_until, int v_len) = (1659054990, 64);
+    ;; slice value = make_slice(666, 100);
+
+    (builder bmsg_add_in, builder bmsg_add_body) = make_internal_msg(
+        sender_addr,
+        msg_value,
+        op_add,
+        query_id_add
+    );
+    slice msg_add_body = bmsg_add_body
+        ;; .store_uint(key, k_len) ;; key
+        ;; .store_uint(valid_until, v_len) ;; valid_until unixtime 1649054990 3:50:20 am 4/4/2022
+        ;; .store_slice(value)
+        .end_cell().begin_parse();
+    cell msg_add = bmsg_add_in.store_slice(msg_add_body).end_cell();
+
+    tuple stack = unsafe_tuple([balance, msg_value, msg_add, msg_add_body]); ;; stack that will be passed to function
+
+    tuple debug_rep = unsafe_tuple([
+    ;;   unsafe_tuple([req_addr.parse_std_addr()]),
+      unsafe_tuple([op_add, query_id_add])
+      ;; , unsafe_tuple([key, valid_until, value.preload_uint(100)])
+    ]);
+    debug_rep~dump();
+
+    return [function_selector, stack, data, c7, null()];
+}
+
+_ test_remove(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(7) {
+    ;; return ();
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+    ;; return ();
+    var ds = data.begin_parse();
+    ;; ds~dump();
+    ;; exit_code~dump();
+    throw_if(101, ds.slice_bits() == 0);
+    cell dict = ds~load_dict();
+    (int key1, int key2, int key_len) = (123, 456, 256);
+    ;; (cell cvalue, int f) = dict.udict_get_ref?(key_len, key);
+    ;; cvalue~dump();
+    (slice sdata, int f) = dict.udict_get?(key_len, key1);
+    ;; sdata~dump();
+    throw_unless(102, f);
+    (slice sdata, f) = dict.udict_get?(key_len, key2);
+    ;; sdata~dump();
+    throw_if(103, f);
+    
+    ;; (int valid_until, int v_len) = (1659054990, 64);
+    ;; slice value = make_slice(666, 100);
+
+    ;; int d_valid = sdata~load_uint(64);
+    
+    ;; throw_unless(103, d_valid == valid_until);
+
+    ;; throw_unless(104, value.equal_slices(sdata));
+    ;; int len = sdata.slice_bits();
+    ;; len~dump();
+    ;; throw_unless(103, f1);
+
+    tuple debug = unsafe_tuple([
+          exit_code
+        ;; , unsafe_tuple([
+        ;;     key
+        ;;   , d_valid
+        ;;   , sdata.preload_uint(sdata.slice_bits())
+          
+        ;;   ])
+    ]);
+    debug~dump();
+
+    var ds = data.begin_parse();
+    ;; throw_if(101, ds~load_uint(64) != 10); ;; check if counter has been changed
+    throw_if(107, gas > 1000000); ;; check if gas usage is not so big
+}
+
+;; Test remove outdated
+
+[int, tuple, cell, tuple, int] test_remove2_data() method_id(8) {
+
+    slice sender_addr = make_none_addr(); ;; 
+    cell data = get_prev_c4();     
+    ;; Funtion to run (recv_internal)
+    int function_selector = 0;
+
+    tuple c7 = get_c7();
+    int balance = 1000000000;
+    int msg_value = 1000;
+
+    int op_add = 2;
+    int query_id_add = 0x2;
+    ;; (int key, int k_len) = (123, 256);
+    ;; (int valid_until, int v_len) = (1659054990, 64);
+    ;; slice value = make_slice(666, 100);
+
+    (builder bmsg_add_in, builder bmsg_add_body) = make_internal_msg(
+        sender_addr,
+        msg_value,
+        op_add,
+        query_id_add
+    );
+    slice msg_add_body = bmsg_add_body
+        ;; .store_uint(key, k_len) ;; key
+        ;; .store_uint(valid_until, v_len) ;; valid_until unixtime 1649054990 3:50:20 am 4/4/2022
+        ;; .store_slice(value)
+        .end_cell().begin_parse();
+    cell msg_add = bmsg_add_in.store_slice(msg_add_body).end_cell();
+
+    tuple stack = unsafe_tuple([balance, msg_value, msg_add, msg_add_body]); ;; stack that will be passed to function
+
+    tuple debug_rep = unsafe_tuple([
+    ;;   unsafe_tuple([req_addr.parse_std_addr()]),
+      unsafe_tuple([op_add, query_id_add])
+      ;; , unsafe_tuple([key, valid_until, value.preload_uint(100)])
+    ]);
+    debug_rep~dump();
+
+    return [function_selector, stack, data, c7, null()];
+}
+
+_ test_remove2(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(9) {
+    ;; return ();
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+
+}
+
+[int, tuple, cell, tuple, int] test_get_678_data() method_id(10) {
+    int function_selector = 127977; ;; funtion to run (128253 is get_total, check contract.fif)
+
+    ;; cell data = begin_cell()             ;; initial data
+    ;;     .store_uint(10, 64)               ;; counter
+    ;;     .end_cell();
+
+    cell data = get_prev_c4();
+
+    return [function_selector, unsafe_tuple([678]), data, get_c7(), null()];
+}
+
+_ test_get_678(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(11) {
+    exit_code~dump();
+    throw_if(100, exit_code == 0); ;; test need to be passed
+    
+    ;; throw_if(101, counter != 10); ;; test if answer is 10 as we set
+}
+
+;; Test add invalid data
+
+[int, tuple, cell, tuple, int] test_modify_data() method_id(12) {
+
+    slice sender_addr = make_none_addr(); ;; 
+    cell data = get_prev_c4();
+    slice ds = data.begin_parse();
+    cell d = ds~load_dict();
+    d~dump();
+
+    ;; Funtion to run (recv_internal)
+    int function_selector = 0;
+
+    tuple c7 = get_c7();
+    int balance = 1000000000;
+    int msg_value = 1000;
+
+    int op_add = 1;
+    int query_id_add = 0x1;
+    (int key, int k_len) = (123, 256);
+    (int valid_until, int v_len) = (1959054990, 64); ;; valid
+    ;; (int valid_until, int v_len) = (1659054990, 64); ;; valid
+    slice value = make_slice(999, 100);
+
+    (builder bmsg_add_in, builder bmsg_add_body) = make_internal_msg(
+        sender_addr,
+        msg_value,
+        op_add,
+        query_id_add
+    );
+    slice msg_add_body = bmsg_add_body
+        .store_uint(key, k_len) ;; key
+        .store_uint(valid_until, v_len) ;; valid_until unixtime 1649054990 3:50:20 am 4/4/2022
+        .store_slice(value)
+        .end_cell().begin_parse();
+    cell msg_add = bmsg_add_in.store_slice(msg_add_body).end_cell();
+
+    tuple stack = unsafe_tuple([balance, msg_value, msg_add, msg_add_body]); ;; stack that will be passed to function
+
+    tuple debug_rep = unsafe_tuple([
+    ;;   unsafe_tuple([req_addr.parse_std_addr()]),
+      unsafe_tuple([op_add, query_id_add]),
+      unsafe_tuple([key, valid_until, value.preload_uint(100)])
+    ]);
+    debug_rep~dump();
+
+    return [function_selector, stack, data, c7, null()];
+}
+
+_ test_modify(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(13) {
+    ;; return ();
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+}
+
+
+
+
+[int, tuple, cell, tuple, int] test_get_123_data() method_id(14) {
+    int function_selector = 127977; ;; funtion to run (128253 is get_total, check contract.fif)
+
+    ;; cell data = begin_cell()             ;; initial data
+    ;;     .store_uint(10, 64)               ;; counter
+    ;;     .end_cell();
+
+    cell data = get_prev_c4();
+
+    return [function_selector, unsafe_tuple([123]), data, get_c7(), null()];
+}
+
+_ test_get_123(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(15) {
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+    
+    int valid_until = first(stack);
+    throw_if(101, valid_until != 1959054990);
+    
+    slice value = make_slice(999, 100);
+    slice nvalue = second(stack);
+
+    throw_unless(102, value.equal_slices(nvalue));
+    ;; throw_if(101, counter != 10); ;; test if answer is 10 as we set
+}

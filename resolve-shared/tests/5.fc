@@ -1,0 +1,175 @@
+;; Each test function must specify method_id
+;; Test functions method_id need to started from 0
+
+;; Each test functions must to be in pairs
+;; First funtion expect nothing in arguments
+;; But need to return:
+;;        function selector - which function to test, e.g. 0 for recv_internal, -1 recv_external, 85143 for seqno, and so on
+;;        tuple - stack values needed to be passed to function in tuple
+;;        c4 cell - start data of smart contract
+;;        c7 tuple / null
+;;        gas limit integer / null
+;; mode, out_msg
+(tuple, slice) parse_action(slice action) inline method_id {
+    action~load_ref(); ;; reference to previous action
+    (int action_mode, int send_msg_mode) = (action~load_uint(32), action~load_uint(8));
+    slice out_msg = action~load_ref().begin_parse();
+    return (unsafe_tuple([action_mode, send_msg_mode]), out_msg);
+}
+
+[int, tuple, cell, tuple, int] test_pack_data() method_id(0) {
+    int function_selector = 90427; ;; funtion to run (128253 is get_total, check contract.fif)
+
+    cell data = begin_cell().end_cell();
+
+    return [function_selector, unsafe_tuple([123, 456]), data, get_c7(), null()];
+}
+
+_ test_pack(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(1) {
+    throw_if(100, exit_code != 0); ;; test need to be passed
+    ;; data~dump();
+    slice ds = data.begin_parse();
+    throw_if(101, ds~load_uint(256) != 123);
+    throw_if(102, ds~load_uint(256) != 456);
+    ;; ds~dump();
+    cell d = ds~load_dict();
+    d~dump();
+    ~dump(d.dict_empty?());
+    ;; ~dump([d.udict_get_ref?(32, 1)]);
+}
+
+
+[int, tuple, cell, tuple, int] test_addpk1_data() method_id(2) {
+    ;; Funtion to run (recv_external)
+    int function_selector = -1;
+
+    ;; Set message that our wallet will send
+    cell msg_to_send = begin_cell().store_uint(888, 32).end_cell();
+    slice sig = begin_cell()
+        .store_uint(10, 256)
+        .store_uint(10, 256)
+        .end_cell().begin_parse();
+    cell req = begin_cell()
+        .store_uint(now() + 30, 32)  ;; valid_until
+        .store_uint(64, 8)
+        .store_ref(msg_to_send)
+        .end_cell();
+    ;; This is transaction example
+    cell message = begin_cell()     ;; external message body
+            .store_uint(123, 256)           ;; public key
+            ;; .store_uint(456, 256)           ;; public key
+            .store_slice(sig) ;; signature
+            .store_ref(req) ;; request
+            .end_cell();
+
+    tuple stack = unsafe_tuple([message.begin_parse()]); ;; stack for contract (add send message)
+
+    cell data = get_prev_c4();
+
+    return [function_selector, stack, data, get_c7(), null()];
+}
+
+_ test_addpk1(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(3) {
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+    ;; var ds = data.begin_parse();
+    slice ds = data.begin_parse();
+    ds~load_uint(256);
+    ds~load_uint(256);
+    cell d = ds~load_dict();
+    ;; d~dump();
+    (int rhash, slice rdata, int f) = d.udict_get_max?(256);
+
+    int valid_until = rdata.slice_last(32).preload_uint(32);
+    int is_pk1? = rdata~load_int(1);
+    ;; cell msg_to_send = rdata~load_ref();
+    ;; int mode = rdata~load_int(8);
+
+    ~dump([is_pk1?, valid_until]);
+    ;; ~dump([is_pk1?, mode, msg_to_send.begin_parse().preload_uint(32), valid_until]);
+    ;; throw_if(102, ds~load_uint(32) == 0); ;; check seqno is changed
+    ;; throw_if(103, ds~load_uint(32) != 0); ;; check subwallet id is same
+}
+
+
+[int, tuple, cell, tuple, int] test_accept_data() method_id(4) {
+    ;; Funtion to run (recv_external)
+    int function_selector = -1;
+
+    ;; Set message that our wallet will send
+    cell msg_to_send = begin_cell().store_uint(888, 32).end_cell();
+    slice sig = begin_cell()
+        .store_uint(10, 256)
+        .store_uint(10, 256)
+        .end_cell().begin_parse();
+    cell req = begin_cell()
+        .store_uint(now() + 30, 32)  ;; valid_until
+        .store_uint(64, 8)
+        .store_ref(msg_to_send)
+        .end_cell();
+    ;; This is transaction example
+    cell message = begin_cell()     ;; external message body
+            ;; .store_uint(123, 256)           ;; public key
+            .store_uint(456, 256)           ;; public key
+            .store_slice(sig) ;; signature
+            .store_ref(req) ;; request
+            .end_cell();
+
+    tuple stack = unsafe_tuple([message.begin_parse()]); ;; stack for contract (add send message)
+
+    cell data = get_prev_c4();
+
+    return [function_selector, stack, data, get_c7(), null()];
+}
+
+_ test_accept(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(5) {
+    exit_code~dump();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+    ;; var ds = data.begin_parse();
+    slice ds = data.begin_parse();
+    ds~load_uint(256);
+    ds~load_uint(256);
+    cell d = ds~load_dict();
+    ;; d~dump();
+    (int rhash, slice rdata, int f) = d.udict_get_max?(256);
+
+    int valid_until = rdata.slice_last(32).preload_uint(32);
+    int is_pk1? = rdata~load_int(1);
+    ;; cell msg_to_send = rdata~load_ref();
+    ;; int mode = rdata~load_int(8);
+
+    ~dump([is_pk1?, valid_until]);
+
+    
+    slice action = actions.begin_parse();
+    throw_unless(101, action.slice_refs());
+    (tuple mode, slice out_msg) = parse_action(action);
+
+    ~dump(out_msg.preload_uint(32));
+    ;; ~dump([is_pk1?, mode, msg_to_send.begin_parse().preload_uint(32), valid_until]);
+    ;; throw_if(102, ds~load_uint(32) == 0); ;; check seqno is changed
+    ;; throw_if(103, ds~load_uint(32) != 0); ;; check subwallet id is same
+}
+;;
+;;   GET method test
+;;
+
+;; [int, tuple, cell, tuple, int] test_get_seqno_data() method_id(2) {
+;;     int function_selector = 85143; ;; funtion to run (85143 is seqno, check contract.fif)
+;;     ;;tuple stack = unsafe_tuple([null()]); ;; stack for contract
+
+;;     cell data = begin_cell()             ;; initial data of wallet
+;;         .store_uint(0, 32)               ;; seqno
+;;         .store_uint(0, 32)               ;; subwallet
+;;         .store_uint(0, 256)              ;; public key
+;;         .end_cell();
+
+;;     return [function_selector, unsafe_tuple([]), data, get_c7(), null()];
+;; }
+
+;; _ test_get_seqno(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(3) {
+;;     throw_if(104, exit_code != 0); ;; test need to be passed
+;;     var seqno = first(stack); ;; get answer from get method
+;;     throw_if(105, seqno != 0); ;; test if seqno is 0 as we set
+;; }
+

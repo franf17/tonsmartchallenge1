@@ -1,0 +1,166 @@
+;; Each test function must specify method_id
+;; Test functions method_id need to started from 0
+
+;; Each test functions must to be in pairs
+;; First funtion expect nothing in arguments
+;; But need to return:
+;;        function selector - which function to test, e.g. 0 for recv_internal, -1 recv_external, 85143 for seqno, and so on
+;;        tuple - stack values needed to be passed to function in tuple
+;;        c4 cell - start data of smart contract
+;;        c7 tuple / null
+;;        gas limit integer / null
+
+int equal_slices (slice a, slice b) asm "SDEQ";
+
+[int, tuple, cell, tuple, int] test_example_data() method_id(0) {
+
+    int s_addr = 123;
+    int owner_addr = 456;
+
+    ;; Funtion to run (recv_internal)
+    int function_selector = 0;
+
+    tuple c7 = get_c7();
+    int balance = 1000000000;
+    int msg_value = 1000;
+    ;; ;; Example contract message body
+    cell message_body = begin_cell()     ;; external message body
+            .store_uint(666, 64)           ;; message
+            .end_cell();
+
+    ;; Example contract full message 
+    cell message = begin_cell()     ;; external message body
+            .store_uint(6, 4)        ;; flags
+            ;; sender internal address
+            .store_uint(2, 2) ;; first int 2 of tuple
+            .store_uint(0, 1) ;; null for anycast absent
+            .store_int(0, 8)           ;; workchain id
+            ;; .store_uint(owner_addr, 256)       ;; owner address send msg 
+            .store_uint(s_addr, 256)       ;; address
+            ;; receiver address (me)
+            .store_slice(my_address())
+            ;; msg value
+            .store_grams(msg_value)
+            ;; empty extra-currencies dictionary
+            .store_uint(0, 1)
+            ;; ihr_fee 
+            .store_uint(10, 4)
+            ;; fwd_fee 
+            .store_uint(10, 4)
+            ;; created_lt and created_at & there is no init field & msg body serialized in place
+            .store_uint(10, 64 + 32 + 1 + 1)
+            ;; .store_uint(0, 1 + 4 + 4 + 64 + 32 + 1 + 1) ;; optimized for sending
+            ;; msg_body
+            .store_slice(message_body.begin_parse())
+            .end_cell();
+
+    tuple stack = unsafe_tuple([balance, msg_value, message, message_body.begin_parse()]); ;; stack that will be passed to function
+
+
+    ;; slice my_addr = my_address();
+    ;; int len = my_addr.slice_bits();
+    ;; int first_bits = my_addr~load_uint(2);
+    ;; (int w_id, int addr) = my_addr~load_msg_addr().parse_std_addr();
+    ;; tuple debug = unsafe_tuple([len, first_bits, w_id, addr]);
+    ;; tuple debug = unsafe_tuple([len, first_bits]);
+    ;; debug~dump();
+
+
+    cell data = begin_cell()             ;; initial data of contract
+                ;; owner address
+                .store_uint(2, 2) ;; first int 2 of tuple
+                .store_uint(0, 1) ;; null for anycast absent
+                .store_int(0, 8)           ;; workchain id
+                .store_uint(owner_addr, 256)       ;; address
+                ;; .store_uint(456, 264)       ;; address
+            .end_cell();
+            
+
+    return [function_selector, stack, data, c7, null()];
+}
+
+
+;; After test data function
+;; We need to define test funtion
+;; It will accept:
+;;        exit code - exit code of runvm, here you can check errors / not
+;;        c4 cell - data of smart contract after runvm invokes
+;;        tuple - stack values of smart contract
+;;        c5 cell - here you can check all outcoming messages
+;;        gas - gas that was used
+;; By default test is passed
+;; You can use throw_if to fail test
+
+_ test_example(int exit_code, cell data, tuple stack, cell actions, int gas) method_id(1) {
+    ;; return ();
+    throw_if(100, exit_code != 0); ;; test need to be passed
+
+    slice last_action = actions.begin_parse();
+    throw_unless(101, last_action.slice_refs()); ;; should send message (stored as reference in actions cell)
+                        ;; next action
+    ;; action_list~dump();
+    ;; (slice first_action, _) = actions.begin_parse().load_ref();
+
+    last_action~load_ref(); ;; reference to previous action 
+    ;; slice prev_action = action_list~load_ref().begin_parse(); ;; empty cell
+    ;; prev_action~dump();
+
+
+    (int action_mode, int send_msg_mode) = (last_action~load_uint(32), last_action~load_uint(8));
+    ;; second ref is out_msg
+    slice out_msg = last_action~load_ref().begin_parse();
+    ;; out_msg~dump();
+    ;; last_action~dump();
+    ;; last_action.end_cell();
+
+    out_msg~load_uint(6); ;; flags
+    slice send_to_addr = out_msg~load_msg_addr();
+    slice owner_addr = begin_cell()             ;; initial data of contract
+            ;; owner address
+            .store_uint(2, 2) ;; first int 2 of tuple
+            .store_uint(0, 1) ;; null for anycast absent
+            .store_int(0, 8)           ;; workchain id
+            .store_uint(456, 256)       ;; address
+            ;; .store_uint(456, 264)       ;; address
+        .end_cell().begin_parse();
+
+    throw_unless(102, equal_slices(send_to_addr, owner_addr)); ;; should ignore message sent by owner
+
+    [int b, cell c] = get_balance();
+    int value = out_msg~load_grams();
+    out_msg~load_uint(1 + 4 + 4 + 64 + 32 + 1 + 1); ;; empty currencies + fees + flags
+
+    slice sender_addr = begin_cell()
+            .store_uint(2, 2) ;; first int 2 of tuple
+            .store_uint(0, 1) ;; null for anycast absent
+            .store_int(0, 8)           ;; workchain id
+            .store_uint(123, 256)       ;; address
+        .end_cell().begin_parse();
+        
+    ;; msg~load_uint(40); ;; opcode & binary comment identifier
+    slice sender_addr_in_body = out_msg~load_msg_addr();
+    throw_unless(102, equal_slices(sender_addr_in_body, sender_addr));
+
+    slice msg_body = begin_cell()     ;; external message body
+            .store_uint(666, 64)           ;; message
+        .end_cell().begin_parse();
+    slice received_msg_body = out_msg~load_ref().begin_parse();
+    throw_unless(103, equal_slices(msg_body, received_msg_body));
+
+    tuple debug = unsafe_tuple([
+        exit_code, 
+        b, 
+        value,
+        unsafe_tuple([action_mode, send_msg_mode]), 
+        unsafe_tuple([send_to_addr.parse_std_addr()]), 
+        unsafe_tuple([sender_addr.parse_std_addr()]), 
+        received_msg_body.preload_uint(64)
+    ]);
+    debug~dump();
+
+    var ds = data.begin_parse();
+    ;; throw_if(101, ds~load_uint(64) != 10); ;; check if counter has been changed
+    throw_if(104, gas > 1000000); ;; check if gas usage is not so big
+}
+
+
